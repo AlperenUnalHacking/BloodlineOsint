@@ -80,6 +80,12 @@ DEFAULT_CONFIG: dict = {
     "sub_threads":    50,
     "user_threads":   20,
     "rate_limit_ms":  0,
+    # NesilAI asistan / dil / seslendirme
+    "ui_lang":        "tr",       # tr | en
+    "tts_enabled":    False,      # Türkçe seslendirme
+    "tts_lang":       "tr",
+    "tts_rate":       180,
+    "tts_volume":     1.0,
 }
 
 MCCMNC_URL = "https://raw.githubusercontent.com/telecomhall/mcc-mnc/master/mccmnc.json"
@@ -97,6 +103,134 @@ try:
     DNS_OK = True
 except ImportError:
     DNS_OK = False
+
+# ── NESILAI — yerleşik yapay zeka asistanı ───────────────────────────
+BLOODLINE_URL = "https://bloodline.agentui.app/"
+MAKER_NAME    = "Acsida"
+
+try:
+    import pyttsx3
+    TTS_OK = True
+except ImportError:
+    TTS_OK = False
+
+
+def nesilai_reply(text: str) -> str:
+    """NesilAI yerleşik asistanı — doğal dil sorularına yanıt üretir."""
+    t = text.strip().lower()
+    # türkçe karakter normalizasyonu (kimdir == kimdir)
+    norm = (t.replace("ı", "i").replace("İ", "i").replace("ş", "s")
+             .replace("ğ", "g").replace("ü", "u").replace("ö", "o")
+             .replace("ç", "c"))
+
+    def has(*words: str) -> bool:
+        # kelime sınırlı eşleşme: "sen" "seni" içinde geçmesin
+        return any(re.search(rf"\b{re.escape(w)}\b", norm) for w in words)
+
+    # "sen kimsin / kim olduğumu" sorusu
+    if (has("kimsin", "nesilsin", "nesil ai", "nesilai")
+            or (has("kim") and has("sen"))
+            or (has("kendini") and has("tanit"))):
+        return ("Ben NesilAI — Bloodline üzerindeki yerleşik yapay zeka "
+                "asistanıyım. Sorularını yaz, cevaplayayım.\n")
+
+    # "seni kim yaptı" sorusu
+    if (has("seni kim yapti", "seni kim olusturdu", "seni kim gelistirdi",
+            "seni kim yazdi", "kim yapti seni")
+            or (has("kim") and has("yapti", "olusturdu", "gelistirdi") and has("seni"))):
+        return ("Ben aslında Bloodline üzerindeki yapay zeka asistanıyım, "
+                "burada Bloodline'dan bağımsız herkese yardım etmeyi "
+                f"amaçlıyorum; beni {MAKER_NAME} yaptı.\n")
+
+    # "betty / beste kim" sorusu
+    if has("betty", "beste", "acsidanin sevgilisi", "acsida nin sevgilisi",
+            "acsida'nin sevgilisi"):
+        return ("Betty, diğer adıyla Beste — Acsida'nın sevdiği kız, "
+                "diğer ifadeyle sevgilisi.\n")
+
+    # "bloodline linki" sorusu
+    if has("bloodline link", "bloodline adres", "bloodline sitesi",
+            "bloodline url", "bloodline web", "bloodline"):
+        return f"Bloodline bağlantısı: {BLOODLINE_URL}\n"
+
+    # "help / komutlar" doğal dil
+    if has("nasil kullanilir", "nasil kullanirim", "yardim et", "komutlar ne"):
+        return ("Komut panelinde 'komutlar' yazarsan tüm komutları görebilirsin. "
+                f"Bloodline: {BLOODLINE_URL}\n")
+
+    # selamlama
+    if t in ("merhaba", "selam", "hey", "gunaydin", "iyi aksamlar", "naber",
+             "nasilsin", "hello", "hi") or has("selamun aleykum"):
+        return "Merhaba! Ben NesilAI — nasıl yardımcı olabilirim?\n"
+
+    return ""  # eşleşme yok → normal komut olarak işlenir
+
+
+_INTRO_LINES = (
+    "Merhaba, ben NesilAI.",
+    "NesilAI burada.",
+    "Dinliyorum.",
+    "Buyur, seni dinliyorum.",
+)
+_BYE_LINES = (
+    "Görüşürüz.",
+    "Kapatıyorum.",
+    "Hoşça kal.",
+)
+
+
+def tts_say(text: str, config: dict) -> str:
+    """Metni Türkçe seslendirir. Hata mesajı döner, başarılıysa boş string."""
+    if not TTS_OK:
+        return "[✘] Türkçe seslendirme için gerekli paket eksik:\n" \
+               "    pip install pyttsx3\n"
+    try:
+        import pythoncom  # Windows COM — arka plan thread'lerinde gerekli
+        pythoncom.CoInitialize()
+    except Exception:
+        pythoncom = None
+    try:
+        eng = pyttsx3.init()
+        want_tr = str(config.get("tts_lang", "tr")).lower()
+        want_rate = int(config.get("tts_rate", 180))
+        want_vol = float(config.get("tts_volume", 1.0))
+        try:
+            eng.setProperty("rate", want_rate)
+            eng.setProperty("volume", want_vol)
+        except Exception:
+            pass
+        voice = None
+        if want_tr == "tr":
+            # SAPI5 Türkçe sesi: adında veya dil kodunda tr geçen sesi seç
+            for v in eng.getProperty("voices") or []:
+                desc = ((getattr(v, "name", "") or "") + " "
+                        + (getattr(v, "id", "") or "")).lower()
+                try:
+                    lang = (v.language or b"").decode("utf-8", "ignore").lower()
+                except Exception:
+                    lang = str(getattr(v, "language", "") or "").lower()
+                if ".tr-" in desc or "turk" in desc or "tr-" in lang \
+                        or lang.startswith("tr"):
+                    voice = v
+                    break
+            if voice is not None:
+                eng.setProperty("voice", voice.id)
+        try:
+            eng.say(text)
+            eng.runAndWait()
+        finally:
+            try:
+                eng.stop()
+            except Exception:
+                pass
+        return ""
+    except Exception as e:
+        return f"[✘] Seslendirme hatası: {e}\n"
+
+
+def tts_available() -> bool:
+    return TTS_OK
+
 
 # ── platforms ─────────────────────────────────────────────────────────
 PLATFORMS: dict[str, str] = {
@@ -1830,7 +1964,16 @@ class BloodlineApp(tk.Tk):
             "  shodan <ip|domain>\n\n"
             "Favoriler\n"
             "  fav list / fav add <x> / fav del <x>\n\n"
+            "NesilAI\n"
+            "  ai <soru>                 yerleşik asistana soru sor\n"
+            "  dil [tr|en]               dil seçimi (ayrıca: ayarlar)\n"
+            "  ses [on|off|test]         Türkçe seslendirme\n"
+            "  timeout <sn>              ağ zaman aşımı\n"
+            "  log [on|off]              sorgu logu\n"
+            "  ayarlar                   tüm ayarları göster\n\n"
             f"Aktif modlar:\n"
+            f"  Dil    : {self.configs.get('ui_lang', 'tr')}\n"
+            f"  Ses    : {'Açık' if self.configs.get('tts_enabled', False) else 'Kapalı'}\n"
             f"  HIBP   : {hm}\n"
             f"  Shodan : {sm}\n"
             f"  Proxy  : {self.configs.get('proxy_mode','off')}\n"
@@ -1845,11 +1988,94 @@ class BloodlineApp(tk.Tk):
 
         if head in ("komutlar","help","yardım","?"):
             return self._help()
-        if head == "clear":
-            return ""
+        if head in ("ai", "nesilai", "nesil"):
+            arg = raw[len(head):].strip()
+            if not arg:
+                return ("[ℹ] NesilAI'ye sormak istediğini yaz:\n"
+                        "    ai sen kimsin\n"
+                        "    ai seni kim yaptı\n"
+                        "    ai betty kim\n"
+                        f"    ai bloodline linki  →  {BLOODLINE_URL}\n")
+            r = nesilai_reply(arg)
+            if not r:
+                r = ("[ℹ] NesilAI bunu anlayamadı. Şunları deneyebilirsin:\n"
+                     "    ai sen kimsin  |  ai seni kim yaptı\n"
+                     "    ai betty kim   |  ai bloodline linki\n")
+            if self.configs.get("tts_enabled", False):
+                err = tts_say(re.sub(r"\[[^\]]*\]\s*", "", r.replace("\n", " ")),
+                              self.configs)
+                if err:
+                    return err + r
+            return r
+        if head == "dil":
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg in ("tr", "türkçe", "turkce"):
+                self.configs["ui_lang"] = "tr"
+                save_config(self.configs)
+                return "[✔] Dil: Türkçe\n"
+            if arg in ("en", "english", "ingilizce"):
+                self.configs["ui_lang"] = "en"
+                save_config(self.configs)
+                return "[✔] Language: English\n"
+            return (f"[ℹ] Aktif dil: {self.configs.get('ui_lang', 'tr')}\n"
+                    "    dil tr | dil en\n")
+        if head in ("ses", "voice", "tts"):
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg == "on" or arg == "aç" or arg == "ac":
+                if not TTS_OK:
+                    return "[✘] pyttsx3 yok: pip install pyttsx3\n"
+                self.configs["tts_enabled"] = True
+                save_config(self.configs)
+                err = tts_say("Türkçe seslendirme açıldı.", self.configs)
+                return "[✔] Seslendirme açık." + (f"\n{err}" if err else "\n")
+            if arg == "off" or arg == "kapat":
+                self.configs["tts_enabled"] = False
+                save_config(self.configs)
+                return "[✔] Seslendirme kapalı.\n"
+            if arg == "test":
+                err = tts_say("Merhaba, ben NesilAI. Türkçe seslendirme testi.",
+                              self.configs)
+                return ("[✔] Test tamam.\n" if not err
+                        else err + "[ℹ] Windows Türkçe ses paketi kurulu değilse "
+                                   "Ayarlar → Bölge → Dil'den Türkçe dil paketi ekleyin.\n")
+            return (f"[ℹ] Seslendirme: "
+                    f"{'Açık' if self.configs.get('tts_enabled', False) else 'Kapalı'}\n"
+                    "    ses on | ses off | ses test\n")
+        if head in ("timeout", "zamanasimi"):
+            if len(parts) < 2 or not parts[1].isdigit():
+                return f"[ℹ] Aktif timeout: {self.timeout}s\n    timeout <saniye>\n"
+            v = max(1, min(int(parts[1]), 120))
+            self.configs["timeout"] = v
+            self.timeout = v
+            save_config(self.configs)
+            return f"[✔] Timeout: {v}s\n"
         if head == "log":
+            if len(parts) > 1 and parts[1].lower() in ("on", "aç", "ac", "off", "kapat"):
+                en = parts[1].lower() in ("on", "aç", "ac")
+                self.configs["log_enabled"] = en
+                save_config(self.configs)
+                return f"[✔] Sorgu logu: {'açık' if en else 'kapalı'}\n"
             return (open(LOG_FILE, encoding="utf-8").read()
                     if os.path.exists(LOG_FILE) else "[ℹ] Log yok.\n")
+        if head in ("ayarlar", "settings", "ayar"):
+            c = self.configs
+            return ("⚙️  AYARLAR\n"
+                    "──────────────────────────────\n"
+                    f"  Dil          : {c.get('ui_lang', 'tr')}\n"
+                    f"  Seslendirme  : {'Açık' if c.get('tts_enabled', False) else 'Kapalı'}"
+                    f"  (ses on/off)\n"
+                    f"  Timeout      : {c.get('timeout', 10)}s\n"
+                    f"  Log          : {'Açık' if c.get('log_enabled', True) else 'Kapalı'}"
+                    f"  (log on/off)\n"
+                    f"  Cache        : {'Açık' if c.get('cache_enabled', True) else 'Kapalı'}"
+                    f"  (TTL {c.get('cache_ttl', 3600)}s)\n"
+                    f"  Proxy        : {c.get('proxy_mode', 'off')}\n"
+                    f"  HIBP modu    : {c.get('hibp_mode', 'noapi')}\n"
+                    f"  Shodan modu  : {c.get('shodan_mode', 'noapi')}\n"
+                    "──────────────────────────────\n"
+                    "  GUI: ⚙️ Settings paneli\n")
+        if head == "clear":
+            return ""
         if head == "cache":
             if len(parts) > 1 and parts[1] == "clear":
                 self._cache.clear()
@@ -2047,6 +2273,16 @@ class BloodlineApp(tk.Tk):
             if not arg:
                 return "[✘] shodan <ip|domain>\n"
             return self._run_shodan(arg)
+
+        # ── NesilAI doğal dil fallback'i ────────────────────────────
+        # Bilinmeyen girdi asistana yönlendirilir; anlarsa cevap verir.
+        ai = nesilai_reply(raw)
+        if ai:
+            if self.configs.get("tts_enabled", False):
+                err = tts_say(ai.replace("\n", " "), self.configs)
+                if err:
+                    return err + ai
+            return ai
 
         return f"[✘] Bilinmeyen komut: {head}\n\n" + self._help()
 
@@ -2650,7 +2886,6 @@ class BloodlineApp(tk.Tk):
         self.clear_body()
         self._title(self.body, "Settings",
                     "Proxy • HIBP Modu • Shodan Modu • DB • Ağ • Cache • Renkler")
-
         canvas = tk.Canvas(self.body, bg=APP_BG, highlightthickness=0)
         vsb    = tk.Scrollbar(self.body, orient="vertical", command=canvas.yview,
                                bg=APP_BG, troughcolor=APP_BG)
@@ -2671,6 +2906,62 @@ class BloodlineApp(tk.Tk):
             f = tk.Frame(inn, bg=CARD_BG, bd=1, relief="solid")
             f.pack(fill="x", padx=26, pady=(0, 10))
             return f
+
+        # ══════════════════════════════════
+        # DİL & NESILAI SESLENDİRME
+        # ══════════════════════════════════
+        sec("🌐  Dil & NesilAI Seslendirme")
+        lang_card = card()
+
+        lang_row = tk.Frame(lang_card, bg=CARD_BG)
+        lang_row.pack(fill="x", padx=12, pady=(10, 6))
+        tk.Label(lang_row, text="Dil / Language:", fg="#666", bg=CARD_BG,
+                 font=("Consolas", 10)).pack(side="left")
+        lang_var = tk.StringVar(value=self.configs.get("ui_lang", "tr"))
+        for lbl, val in [("Türkçe", "tr"), ("English", "en")]:
+            tk.Radiobutton(lang_row, text=lbl, variable=lang_var, value=val,
+                           fg=TXT_FG, bg=CARD_BG, selectcolor=CARD_BG,
+                           activebackground=CARD_BG, font=("Consolas", 10)
+                           ).pack(side="left", padx=8)
+
+        tts_row = tk.Frame(lang_card, bg=CARD_BG)
+        tts_row.pack(fill="x", padx=12, pady=(0, 6))
+        tts_var = tk.BooleanVar(value=self.configs.get("tts_enabled", False))
+        tts_state = ("(pyttsx3 hazır)" if TTS_OK
+                     else "(pyttsx3 yok — pip install pyttsx3)")
+        tk.Checkbutton(tts_row, text="Türkçe seslendirme (NesilAI)",
+                       variable=tts_var, fg=TXT_FG, bg=CARD_BG,
+                       selectcolor=CARD_BG, activebackground=CARD_BG,
+                       font=("Consolas", 10)).pack(side="left")
+        tk.Label(tts_row, text=f"  {tts_state}", fg="#555", bg=CARD_BG,
+                 font=("Consolas", 8)).pack(side="left")
+
+        def save_lang_tts():
+            self.configs["ui_lang"]     = lang_var.get()
+            self.configs["tts_enabled"] = tts_var.get()
+            save_config(self.configs)
+            self._status(f"Dil: {lang_var.get()}  |  "
+                         f"Seslendirme: {'Açık' if tts_var.get() else 'Kapalı'}")
+
+        def test_tts_btn():
+            err = tts_say("Merhaba, ben NesilAI. Türkçe seslendirme testi.",
+                          {**self.configs, "tts_enabled": True})
+            if err:
+                messagebox.showwarning(
+                    "Seslendirme Testi",
+                    err + "Windows'ta Türkçe ses paketi kurulu değilse:\n"
+                          "Ayarlar → Saat ve Dil → Dil → Türkçe dil paketi ekle.")
+            else:
+                messagebox.showinfo("Seslendirme Testi", "Türkçe seslendirme çalışıyor.")
+
+        ltb = tk.Frame(lang_card, bg=CARD_BG)
+        ltb.pack(anchor="w", padx=12, pady=(0, 12))
+        tk.Button(ltb, text="Kaydet", bg=self.ui_color, fg="black",
+                  font=("Consolas", 10, "bold"), relief="flat", padx=10,
+                  command=save_lang_tts).pack(side="left", padx=(0, 6))
+        tk.Button(ltb, text="Ses Testi", bg="#1a1a1a", fg="#888",
+                  font=("Consolas", 9), relief="flat", padx=8,
+                  command=test_tts_btn).pack(side="left")
 
         # ══════════════════════════════════
         # PROXY
